@@ -2,4 +2,10 @@
 #### my_gen
   This is from https://github.com/yuliangguo/Pytorch_Generalized_3D_Lane_Detection  
   
-  Test to vis
+  Test to vis  
+  
+  
+  # Copyright and License
+  link
+  [mmcv]https://github.com/open-mmlab/mmcv  
+  [mmseg]https://github.com/open-mmlab/mmsegmentation
