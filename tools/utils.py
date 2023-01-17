@@ -974,6 +974,23 @@ def projection_g2im(cam_pitch, cam_height, K):
                       [0, np.sin(np.pi / 2 + cam_pitch),  np.cos(np.pi / 2 + cam_pitch),          0]])
     P_g2im = np.matmul(K, P_g2c) # Matrix product of two arrays.
     return P_g2im
+def homography_crop_resize(org_img_size, crop_y, resize_img_size):
+    """
+        compute the homography matrix transform original image to cropped and resized image
+        计算同形矩阵将原始图像转换为剪切和调整大小的图像
+    :param org_img_size: [org_h, org_w]
+    :param crop_y:
+    :param resize_img_size: [resize_h, resize_w]
+    :return:
+    """
+    # transform original image region to network input region
+    ratio_x = resize_img_size[1] / org_img_size[1]
+    ratio_y = resize_img_size[0] / (org_img_size[0] - crop_y)
+    H_c = np.array([[ratio_x, 0, 0],
+                    [0, ratio_y, -ratio_y*crop_y],
+                    [0, 0, 1]])
+    return H_c
+
 
 def nms_1d(v):
     """
@@ -991,3 +1008,203 @@ def nms_1d(v):
         elif i is not len-1 and v[i+1] > v[i]:
             v_out[i] = 0.
     return v_out
+
+def first_run(save_path):
+    txt_file = os.path.join(save_path,'first_run.txt')
+    if not os.path.exists(txt_file):
+        open(txt_file, 'w').close()
+    else:
+        saved_epoch = open(txt_file).read()
+        if saved_epoch is None:
+            print('You forgot to delete [first run file]')
+            return ''
+        return saved_epoch
+    return ''
+
+def mkdir_if_missing(directory):
+    if not os.path.exists(directory):
+        try:
+            os.makedirs(directory)
+        except OSError as e:
+        #OSError异常。检查特定的错误代码（errno.EEXIST）是为了确保引发的异常不是因为目录已经存在
+            if e.errno != errno.EEXIST:
+                raise
+
+# trick from stackoverflow
+def str2bool(argument):
+    """
+    该函数首先检查输入字符串是否为元组('yes', 'true', 't', 'y', '1')中的字符串之一，如果是则返回True。
+    如果输入字符串是元组('no', 'false', 'f', 'n', '0')中的字符串之一，则返回False。
+    如果输入字符串既不是其中之一，则引发ArgumentTypeError异常，
+    消息为“argparse中的错误参数，应该是一个布尔值”。这个函数可能被用来处理通过argparse库传递给脚本的布尔输入参数。
+    :param argument:
+    :return:  True False Wrong argument in argparse, should be a boolean
+    """
+    if argument.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif argument.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Wrong argument in argparse, should be a boolean')
+
+class Logger(object):
+    """
+    Source https://github.com/Cysu/open-reid/blob/master/reid/utils/logging.py.
+    """
+    def __init__(self, fpath=None):
+        self.console = sys.stdout
+        self.file = None
+        self.fpath = fpath
+        if fpath is not None:
+            mkdir_if_missing(os.path.dirname(fpath))
+            self.file = open(fpath, 'w')
+
+    def __del__(self):
+        self.close()
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, *args):
+        self.close()
+
+    def write(self, msg):
+        self.console.write(msg)
+        if self.file is not None:
+            self.file.write(msg)
+
+    def flush(self):
+        self.console.flush()
+        if self.file is not None:
+            self.file.flush()
+            os.fsync(self.file.fileno())
+
+    def close(self):
+        self.console.close()
+        if self.file is not None:
+            self.file.close()
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+def define_optim(optim, params, lr, weight_decay):
+    # 使用那个optim
+    if optim == 'adam':
+        optimizer = torch.optim.Adam(params, lr=lr, weight_decay=weight_decay)
+    elif optim == 'sgd':
+        optimizer = torch.optim.SGD(params, lr=lr, momentum=0.9, weight_decay=weight_decay)
+    elif optim == 'rmsprop':
+        optimizer = torch.optim.RMSprop(params, lr=lr, momentum=0.9, weight_decay=weight_decay)
+    else:
+        raise KeyError("The requested optimizer: {} is not implemented".format(optim))
+    return optimizer
+
+def define_scheduler(optimizer, args):
+    #使用那种训练的策略
+    if args.lr_policy == 'lambda':
+        def lambda_rule(epoch):
+            lr_l = 1.0 - max(0, epoch + 1 - args.niter) / float(args.niter_decay + 1)
+            return lr_l
+        scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
+    elif args.lr_policy == 'step':
+        scheduler = lr_scheduler.StepLR(optimizer,
+                                        step_size=args.lr_decay_iters, gamma=args.gamma)
+    elif args.lr_policy == 'plateau':
+        scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
+                                                   factor=args.gamma,
+                                                   threshold=0.0001,
+                                                   patience=args.lr_decay_iters)
+    elif args.lr_policy == 'none':
+        scheduler = None
+    else:
+        return NotImplementedError('learning rate policy [%s] is not implemented', args.lr_policy)
+    return scheduler
+
+def define_init_weights(model, init_w='normal', activation='relu'):
+    # 初始化权重
+    print('Init weights in network with [{}]'.format(init_w))
+    if init_w == 'normal':
+        model.apply(weights_init_normal)
+    elif init_w == 'xavier':
+        model.apply(weights_init_xavier)
+    elif init_w == 'kaiming':
+        model.apply(weights_init_kaiming)
+    elif init_w == 'orthogonal':
+        model.apply(weights_init_orthogonal)
+    else:
+        raise NotImplementedError('initialization method [{}] is not implemented'.format(init_w))
+
+def weights_init_normal(m):
+    classname = m.__class__.__name__
+    print("classname: ",classname)
+    if classname.find('Conv') != -1 or classname.find('ConvTranspose') != -1:
+        init.normal_(m.weight.data, 0.0, 0.02)
+        if m.bias is not None:
+            m.bias.data.zero_()
+    elif classname.find('Linear') != -1:
+        init.normal_(m.weight.data, 0.0, 0.02)
+        if m.bias is not None:
+            m.bias.data.zero_()
+    elif classname.find('BatchNorm2d') != -1:
+        init.normal_(m.weight.data, 1.0, 0.02)
+        init.constant_(m.bias.data, 0.0)
+
+def weights_init_xavier(m):
+    classname = m.__class__.__name__
+    # print(classname)
+    if classname.find('Conv') != -1 or classname.find('ConvTranspose') != -1:
+        init.xavier_normal_(m.weight.data, gain=0.02)
+        if m.bias is not None:
+            m.bias.data.zero_()
+    elif classname.find('Linear') != -1:
+        init.xavier_normal_(m.weight.data, gain=0.02)
+        if m.bias is not None:
+            m.bias.data.zero_()
+    elif classname.find('BatchNorm2d') != -1:
+        init.normal_(m.weight.data, 1.0, 0.02)
+        init.constant_(m.bias.data, 0.0)
+
+def weights_init_kaiming(m):
+    classname = m.__class__.__name__
+    # print(classname)
+    if classname.find('Conv') != -1 or classname.find('ConvTranspose') != -1:
+        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in', nonlinearity='relu')
+        if m.bias is not None:
+            m.bias.data.zero_()
+    elif classname.find('Linear') != -1:
+        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in', nonlinearity='relu')
+        if m.bias is not None:
+            m.bias.data.zero_()
+    elif classname.find('BatchNorm2d') != -1:
+        init.normal_(m.weight.data, 1.0, 0.02)
+        init.constant_(m.bias.data, 0.0)
+
+
+def weights_init_orthogonal(m):
+    classname = m.__class__.__name__
+#    print(classname)
+    if classname.find('Conv') != -1 or classname.find('ConvTranspose') != -1:
+        init.orthogonal(m.weight.data, gain=1)
+        if m.bias is not None:
+            m.bias.data.zero_()
+    elif classname.find('Linear') != -1:
+        init.orthogonal(m.weight.data, gain=1)
+        if m.bias is not None:
+            m.bias.data.zero_()
+    elif classname.find('BatchNorm2d') != -1:
+        init.normal_(m.weight.data, 1.0, 0.02)
+        init.constant_(m.bias.data, 0.0)
