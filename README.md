@@ -12,4 +12,7 @@
   [mmcv]https://github.com/open-mmlab/mmcv  
   [mmseg]https://github.com/open-mmlab/mmsegmentation
 
+# ERTnet
 ![image](https://user-images.githubusercontent.com/80395558/213062693-9ea14e0c-f24d-423e-884c-3ff6dddc1c54.png)
+![image](https://user-images.githubusercontent.com/80395558/213077657-a1f7d144-30a2-41c1-8b56-e07c3bf8aa5c.png)
+
